@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import {PrismaClient} from '@prisma/client'
 
 export const applyMiddleware = (prisma: PrismaClient) => {
   /*
@@ -34,70 +34,134 @@ export const applyMiddleware = (prisma: PrismaClient) => {
   }
 
   */
-  prisma.$use(async (params, next) => {
-    if (params.action == "findUnique") {
-      params.action = "findFirst";
-      const where = params.args.where;
+  const skipList: string[] = ['expand', 'organization', 'parentOrganization']
+  
+  prisma.$use((params, next) => {
+    if (skipList.findIndex(val => val === params.model) !== -1) {
+      return next(params)
+    }
+
+    if (params.action === 'findUnique') {
+      params.action = 'findFirst'
+      const where = params.args.where
       // Clear out the filters and reapply them so we can change the shape of a composite key (WhereUniqueInput)
       // to fit the shape of what findFirst would expect (WhereInput)
       // We do that by taking anything that isn't an Object and just putting it right back in,
       // but if we encounter an object we have to iterate through its members to pull them out one level.
-      params.args.where = {};
+      params.args.where = {}
       for (const arg of Object.entries(where)) {
-        if (typeof arg[1] !== "object") {
-          params.args.where[arg[0]] = arg[1];
+        if (typeof arg[1] !== 'object') {
+          params.args.where[arg[0]] = arg[1]
         } else {
-          for (const subarg of Object.entries(
-            arg[1] as Record<string, unknown>
-          )) {
-            params.args.where[subarg[0]] = subarg[1];
+          for (const subarg of Object.entries(arg[1] as Record<string, unknown>)) {
+            params.args.where[subarg[0]] = subarg[1]
           }
         }
       }
-      params.args.where["deletedAt"] = null;
+      params.args.where['isDeleted'] = false
     }
-    if (params.action == "findMany") {
+    if (params.action === 'findMany') {
       if (!params.args) {
-        params.args = {};
+        params.args = {}
       }
-      if (params.args?.where != undefined) {
-        if (params.args.where.deletedAt == undefined) {
-          params.args.where["deletedAt"] = null;
+      if (params.args?.where !== undefined) {
+        if (params.args.where.isDeleted === undefined) {
+          params.args.where['isDeleted'] = false
         }
       } else {
-        params.args["where"] = { deletedAt: null };
+        params.args['where'] = {isDeleted: false}
       }
     }
-    return next(params);
-  });
+    return next(params)
+  })
+  /**
+   * use 'updatedAt DateTime @updatedAt' in schema.prisma
+   */
+  // db.$use(async (params, next) => {
+  //   if (params.action == 'updateMany' || params.action == 'update') {
+  //     if (!params.args) {
+  //       params.args = {}
+  //     }
+  //     if (!params.args.data) {
+  //       params.args.data = {}
+  //     }
+  //     params.args.data['updatedAt'] = new Date()
+  //   }
+  //   return next(params)
+  // })
   prisma.$use(async (params, next) => {
-    if (params.action == "updateMany" || params.action == "update") {
-      if (!params.args) {
-        params.args = {};
-      }
-      if (!params.args.data) {
-        params.args.data = {};
-      }
-      params.args.data["updatedAt"] = new Date();
+    if (skipList.findIndex(val => val === params.model) !== -1) {
+      return next(params)
     }
-    return next(params);
-  });
-  prisma.$use(async (params, next) => {
-    if (params.action == "delete") {
-      params.action = "update";
-      params.args["data"] = { deletedAt: new Date() };
-    }
-    if (params.action == "deleteMany") {
-      if (!params.args) {
-        params.args = {};
+    if (params.action === 'delete') {
+      params.action = 'update'
+      params.args['data'] = {
+        isDeleted: true,
+        deletedAt: new Date(),
       }
-      params.action = "updateMany";
+    }
+    if (params.action === 'deleteMany') {
+      if (!params.args) {
+        params.args = {}
+      }
+      params.action = 'updateMany'
       if (params.args?.data != undefined) {
-        params.args.data["deletedAt"] = new Date();
+        params.args.data['isDeleted'] = true
+        params.args.data['deletedAt'] = new Date()
       } else {
-        params.args["data"] = { deletedAt: new Date() };
+        params.args['data'] = {
+          isDeleted: true,
+          deletedAt: new Date(),
+        }
       }
     }
-    return next(params);
-  });
-};
+    return next(params)
+  })
+
+  // deal include
+  prisma.$use(async (params, next) => {
+    const {include} = params.args
+    if (include) {
+      for (const key in include) {
+        if (Object.prototype.hasOwnProperty.call(include, key)) {
+          if (skipList.findIndex(val => val === key) !== -1) {
+            continue
+          }
+          const element = include[key]
+
+          if (element) {
+            // skip include modelName in skipList
+            if (typeof element === 'boolean') {
+              include[key] = {
+                where: {
+                  isDeleted: false,
+                },
+              }
+            }
+            if (typeof element === 'object') {
+              if (!Object.prototype.hasOwnProperty.call(element, 'where')) {
+                include[key] = {
+                  ...element,
+                  where: {
+                    isDeleted: false,
+                  },
+                }
+              } else {
+                if (!Object.prototype.hasOwnProperty.call(element.where, 'isDeleted')) {
+                  include[key] = {
+                    ...element,
+                    where: {
+                      ...element.where,
+                      isDeleted: false,
+                    },
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    return next(params)
+  })
+}
